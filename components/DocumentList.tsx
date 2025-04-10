@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Document } from '@/types/document';
+import { FaYoutube, FaFilePdf } from 'react-icons/fa';
 
 interface DocumentListProps {
   onDocumentSelect: (documentId: string) => void;
@@ -116,10 +117,21 @@ export default function DocumentList({ onDocumentSelect, selectedDocumentId, onD
                 className="p-3 cursor-pointer"
                 onClick={() => onDocumentSelect(doc._id)}
               >
-                <h3 className="font-medium text-gray-900 truncate pr-8">{doc.fileName}</h3>
-                <p className="text-sm text-gray-500">
-                  {new Date(doc.uploadDate).toLocaleDateString()}
-                </p>
+                <div className="flex items-center space-x-3">
+                  {doc.type === 'youtube' ? (
+                    <FaYoutube className="text-red-500 text-xl flex-shrink-0" />
+                  ) : (
+                    <FaFilePdf className="text-red-500 text-xl flex-shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-medium text-gray-900 truncate pr-8">{doc.fileName}</h3>
+                    <p className="text-sm text-gray-500 flex items-center space-x-1">
+                      <span>{doc.type === 'youtube' ? 'YouTube Video' : 'PDF Document'}</span>
+                      <span>•</span>
+                      <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
+                    </p>
+                  </div>
+                </div>
               </div>
               <button
                 onClick={() => handleDelete(doc._id)}

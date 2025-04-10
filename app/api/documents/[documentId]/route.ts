@@ -5,31 +5,105 @@ import connectDB from '@/lib/mongodb';
 import Document from '@/models/Document';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { INDEX_NAME } from '@/lib/pinecone';
+import { verifyToken } from '@/lib/auth';
 
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { documentId: string } }
+) {
+  try {
+    // Get token from Authorization header
+    const token = request.headers.get('Authorization')?.split(' ')[1];
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    // Verify token and get user ID
+    const userData = await verifyToken(token);
+    if (!userData || !userData.userId) {
+      return NextResponse.json(
+        { error: 'Invalid authentication token' },
+        { status: 401 }
+      );
+    }
+
+    console.log("params values", params);
+
+    const { documentId } = await params;
+    console.log(`Fetching document: ${documentId} for user: ${userData.userId}`);
+
+    // Connect to MongoDB
+    await connectDB();
+
+    // Find the document
+    const document = await Document.findOne({
+      _id: documentId,
+      userId: userData.userId
+    });
+
+    console.log(`Document found: ${document ? 'yes' : 'no'}`);
+
+    if (!document) {
+      return NextResponse.json(
+        { error: 'Document not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(document);
+  } catch (error: any) {
+    console.error('Error fetching document:', error);
+    return NextResponse.json(
+      { error: error.message || 'Failed to fetch document' },
+      { status: 500 }
+    );
+  }
+}
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { documentId: string } }
 ) {
   try {
-    const documentId = params.documentId;
-    const userId = request.headers.get('x-user-id');
-
-    if (!userId) {
+    // Get token from Authorization header
+    const token = request.headers.get('Authorization')?.split(' ')[1];
+    if (!token) {
       return NextResponse.json(
-        { error: 'User ID is required' },
-        { status: 400 }
+        { error: 'Authentication required' },
+        { status: 401 }
       );
     }
+
+    // Verify token and get user ID
+    const userData = await verifyToken(token);
+    if (!userData || !userData.userId) {
+      return NextResponse.json(
+        { error: 'Invalid authentication token' },
+        { status: 401 }
+      );
+    }
+
+    const { documentId } = await params;
+    console.log(`Deleting document: ${documentId} for user: ${userData.userId}`);
 
     // Connect to MongoDB
     await connectDB();
 
     // Find the document
-    const document = await Document.findOne({ _id: documentId, userId });
+    const document = await Document.findOne({
+      _id: documentId,
+      userId: userData.userId
+    });
+
+    console.log(`Document found for deletion: ${document ? 'yes' : 'no'}`);
+
     if (!document) {
       return NextResponse.json(
         { error: 'Document not found' },
@@ -49,21 +123,30 @@ export async function DELETE(
     }
 
     // Delete from Pinecone
-    const index = pinecone.Index(INDEX_NAME);
-    await index.deleteMany({
-      filter: {
-        documentId: document.pineconeId,
-      },
-    });
+    try {
+      const index = pinecone.Index(INDEX_NAME);
+      await index.deleteMany({
+        filter: {
+          documentId: document.pineconeId,
+        },
+        namespace: userData.userId
+      });
+    } catch (error) {
+      console.error('Error deleting from Pinecone:', error);
+      // Continue with MongoDB deletion even if Pinecone deletion fails
+    }
 
     // Delete from MongoDB
-    await Document.deleteOne({ _id: documentId, userId });
+    await Document.findByIdAndDelete(documentId);
 
-    return NextResponse.json({ message: 'Document deleted successfully' });
-  } catch (error) {
+    return NextResponse.json({ 
+      success: true,
+      message: 'Document deleted successfully'
+    });
+  } catch (error: any) {
     console.error('Error deleting document:', error);
     return NextResponse.json(
-      { error: 'Failed to delete document' },
+      { error: error.message || 'Failed to delete document' },
       { status: 500 }
     );
   }

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { PineconeStore } from "@langchain/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { OpenAI } from "openai";
@@ -28,15 +28,15 @@ export async function POST(req: NextRequest) {
     const userId = req.headers.get('x-user-id');
 
     if (!prompt) {
-      return NextResponse.json(
-        { message: "No prompt provided" },
+      return new Response(
+        JSON.stringify({ message: "No prompt provided" }),
         { status: 400 }
       );
     }
 
     if (!userId) {
-      return NextResponse.json(
-        { message: "No user ID found in request" },
+      return new Response(
+        JSON.stringify({ message: "No user ID found in request" }),
         { status: 401 }
       );
     }
@@ -50,9 +50,11 @@ export async function POST(req: NextRequest) {
     const indexExists = await checkIndexExists();
     
     if (!indexExists) {
-      return NextResponse.json({
-        text: "No documents have been uploaded yet. Please upload a document first."
-      });
+      return new Response(
+        JSON.stringify({
+          text: "No documents have been uploaded yet. Please upload a document first."
+        })
+      );
     }
 
     // Initialize OpenAI
@@ -79,9 +81,11 @@ export async function POST(req: NextRequest) {
     console.log("similarDocs", similarDocs);
 
     if (similarDocs.length === 0) {
-      return NextResponse.json({
-        text: "I couldn't find any relevant information to answer your question. Please try asking something related to the documents you've uploaded."
-      });
+      return new Response(
+        JSON.stringify({
+          text: "I couldn't find any relevant information to answer your question. Please try asking something related to the documents you've uploaded."
+        })
+      );
     }
 
     // Extract potential metadata from first few pages
@@ -116,6 +120,12 @@ export async function POST(req: NextRequest) {
       return `[Document ${i+1}: ${fileName}, ${pageInfo}]\n${doc.pageContent}\n\n`;
     }).join('');
 
+    // Create a streaming response
+    const encoder = new TextEncoder();
+    const stream = new TransformStream();
+    const writer = stream.writable.getWriter();
+
+    // Start the OpenAI stream
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -135,11 +145,8 @@ When analyzing the document content:
    - If not found there, look for this information throughout the provided excerpts
    - Clearly state if you can't find specific metadata
 4. For general content questions:
-   - Use the page-specific excerpts provided
-   - Cite specific pages when providing information
-
-The documents contain page numbers and filenames in brackets - use this information for citations.
-
+   - dont use the page numbers in the context, use the filename and the page numbers in the context.
+   
 If you absolutely cannot find the requested information in the provided context, say "I don't have enough information to answer that question. This information might be in parts of the document I don't have access to."
 
 Context:
@@ -152,24 +159,36 @@ ${context}`
       ],
       temperature: 0.3,
       max_tokens: 1000,
+      stream: true,
     });
 
-    return NextResponse.json({
-      text: response.choices[0].message.content,
-      sourceDocuments: similarDocs.map(doc => ({
-        content: doc.pageContent.substring(0, 150) + "...",
-        metadata: doc.metadata,
-      })),
-      document: document ? {
-        fileName: document.fileName,
-        fileUrl: document.fileUrl,
-        uploadDate: document.uploadDate,
-      } : null,
+    // Process the stream
+    (async () => {
+      try {
+        for await (const chunk of response) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            await writer.write(encoder.encode(content));
+          }
+        }
+      } catch (error) {
+        console.error('Error in stream:', error);
+      } finally {
+        await writer.close();
+      }
+    })();
+
+    return new Response(stream.readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
   } catch (error: any) {
     console.error("Error querying documents:", error);
-    return NextResponse.json(
-      { error: error.message || "An error occurred while processing your question" },
+    return new Response(
+      JSON.stringify({ error: error.message || "An error occurred while processing your question" }),
       { status: 500 }
     );
   }
