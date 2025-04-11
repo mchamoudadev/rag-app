@@ -1,10 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Message } from '@/types/message';
 import ReactMarkdown from 'react-markdown';
 import { Document } from '@/types/document';
-import { FaYoutube, FaFilePdf, FaExpand, FaCompress, FaTimes, FaMicrophone, FaMicrophoneSlash, FaKeyboard } from 'react-icons/fa';
-import { useRealtimeVoice } from '@/lib/hooks/useRealtimeVoice';
-import { extractAudioData, extractTranscript, playAudioData, isOpenAIAudioResponse } from '@/lib/openaiAudio';
+import { FaYoutube, FaFilePdf, FaExpand, FaCompress, FaTimes } from 'react-icons/fa';
 
 interface ChatInterfaceProps {
   selectedDocumentId?: string;
@@ -22,78 +20,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  
-  // New state for voice mode
-  const [isVoiceMode, setIsVoiceMode] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [documentContext, setDocumentContext] = useState<string | null>(null);
-
-  // Function to play audio from OpenAI response
-  const playAudioFromResponse = useCallback(async (audioData: string) => {
-    if (!audioRef.current) return;
-    
-    try {
-      await playAudioData(audioData, audioRef.current);
-    } catch (error) {
-      console.error('Error processing audio data:', error);
-    }
-  }, []);
-
-  // Initialize the real-time voice hook
-  const realtimeVoice = useRealtimeVoice({
-    onMessage: (message, messageType) => {
-      // Process the message from the voice API
-      console.log('Message from voice API:', message);
-      
-      if (messageType === 'rag-indicator') {
-        // This is just an indicator message, add it with special styling
-        setMessages(prev => {
-          const newMessages = [...prev];
-          // Add as a special system message
-          newMessages.push({
-            role: 'system',
-            content: message,
-            timestamp: Date.now()
-          });
-          return newMessages;
-        });
-      } else {
-        // This is a regular message from the assistant
-        setMessages(prev => {
-          const newMessages = [...prev];
-          // Check if the last message is a "listening" placeholder
-          const lastMsg = newMessages[newMessages.length - 1];
-          
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '🎤 Listening...') {
-            // Replace the listening message
-            lastMsg.content = message;
-            lastMsg.timestamp = Date.now();
-          } else {
-            // Add as a new message
-            newMessages.push({
-              role: 'assistant',
-              content: message,
-              timestamp: Date.now()
-            });
-          }
-          return newMessages;
-        });
-        
-        // Save to chat history
-        saveChatHistory(messages);
-      }
-    },
-    onError: (error) => {
-      console.error('Voice API error:', error);
-      setError(error);
-    },
-    onStatusChange: (isConnected) => {
-      console.log('Voice API connection status:', isConnected);
-      // You can use this to update UI based on connection status
-    }
-  }, { documentId: selectedDocumentId });
 
   // Fetch current document when selectedDocumentId changes
   useEffect(() => {
@@ -125,9 +51,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
         
         // Fetch chat history for this document
         await fetchChatHistory(selectedDocumentId);
-        
-        // Fetch document context for RAG
-        await fetchDocumentContent(selectedDocumentId);
       } catch (err) {
         console.error('Error fetching document:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch document');
@@ -136,51 +59,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
 
     fetchDocument();
   }, [selectedDocumentId]);
-
-  // Fetch document content for RAG context
-  const fetchDocumentContent = async (documentId: string) => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      // Get document chunks from Pinecone/DB for context
-      const response = await fetch(`/api/documents/${documentId}/content`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch document content');
-      }
-
-      const { content } = await response.json();
-      console.log('Fetched document content for RAG:', content.substring(0, 100) + '...');
-      
-      // Set context for RAG
-      setDocumentContext(content);
-      
-      // If realtime voice is already connected, update context
-      if (realtimeVoice.state.isConnected) {
-        realtimeVoice.setContext(content);
-      }
-      
-    } catch (err) {
-      console.error('Error fetching document content:', err);
-      // Continue without showing error to user
-    }
-  };
-
-  // Clean up audio resources when component unmounts
-  useEffect(() => {
-    return () => {
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [audioStream]);
 
   // Fetch chat history for a document
   const fetchChatHistory = async (documentId: string) => {
@@ -353,32 +231,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
     }
   };
 
-  // Parse and handle incoming OpenAI messages
-  const handleOpenAIMessage = useCallback((messageData: any) => {
-    // Extract audio data if present
-    const audioData = extractAudioData(messageData);
-    if (audioData) {
-      playAudioFromResponse(audioData);
-    }
-    
-    // Extract transcript if present
-    const transcript = extractTranscript(messageData);
-    if (transcript) {
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: transcript,
-        timestamp: Date.now()
-      };
-      
-      setMessages(prev => {
-        const updatedMessages = [...prev, assistantMessage];
-        saveChatHistory(updatedMessages);
-        return updatedMessages;
-      });
-    }
-  }, [playAudioFromResponse]);
-
-  // Handle query submission
   const handleQuery = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !selectedDocumentId) return;
@@ -403,7 +255,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
         throw new Error('No authentication token found');
       }
 
-      // Send the query to the server
       const response = await fetch('/api/question', {
         method: 'POST',
         headers: {
@@ -417,74 +268,52 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
       });
 
       if (!response.ok) {
-        throw new Error('Failed to process query');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to get response');
       }
 
-      // Check if response is JSON or stream
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        // Handle regular JSON response
-        const data = await response.json();
-        
-        // Process potential OpenAI audio response
-        if (isOpenAIAudioResponse(data)) {
-          handleOpenAIMessage(data);
-        } else {
-          // Handle regular message
-          const assistantMessage: Message = {
-            role: 'assistant',
-            content: data.response,
-            timestamp: Date.now()
-          };
-          
-          const finalMessages = [...updatedMessages, assistantMessage];
-          setMessages(finalMessages);
-          await saveChatHistory(finalMessages);
-        }
-      } else {
-        // Handle streaming response
-        // Add an empty assistant message that we'll update with the stream
-        const assistantMessage: Message = {
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now()
-        };
-        
-        const messagesWithAssistant = [...updatedMessages, assistantMessage];
-        setMessages(messagesWithAssistant);
+      // Add an empty assistant message that we'll update with the stream
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now()
+      };
+      
+      const messagesWithAssistant = [...updatedMessages, assistantMessage];
+      setMessages(messagesWithAssistant);
 
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-        if (!reader) {
-          throw new Error('No reader available');
-        }
+      if (!reader) {
+        throw new Error('No reader available');
+      }
 
-        let fullContent = '';
+      let fullContent = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        fullContent += chunk;
         
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value);
-          fullContent += chunk;
-          
-          setMessages(prev => {
-            const newMessages = [...prev];
-            const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage.role === 'assistant') {
-              lastMessage.content = fullContent;
-            }
-            return newMessages;
-          });
-        }
-        
-        // Save final chat history with response
         setMessages(prev => {
-          saveChatHistory(prev);
-          return prev;
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage.role === 'assistant') {
+            lastMessage.content = fullContent;
+          }
+          return newMessages;
         });
       }
+      
+      // Save final chat history with response
+      setMessages(prev => {
+        saveChatHistory(prev);
+        return prev;
+      });
+      
     } catch (err) {
       console.error('Query error:', err);
       setError(err instanceof Error ? err.message : 'Failed to process query');
@@ -500,107 +329,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
       await saveChatHistory(messagesWithError);
     } finally {
       setIsStreaming(false);
-    }
-  };
-
-  // Effect to sync document with voice interface
-  useEffect(() => {
-    if (currentDocument && documentContext && realtimeVoice.state.isVoiceMode) {
-      // Format the document content for the voice interface
-      const formattedContext = formatDocumentForVoice(documentContext, currentDocument);
-      
-      // Set context in the voice system
-      realtimeVoice.setContext(formattedContext);
-      console.log('Document context set for voice interface');
-    }
-  }, [currentDocument, documentContext, realtimeVoice.state.isVoiceMode]);
-  
-  // Format document content for voice interface
-  const formatDocumentForVoice = (content: string, document: any): string => {
-    let contextString = '';
-    
-    if (document.type === 'youtube') {
-      contextString = `YouTube Video: ${document.fileName}\n\n${content}`;
-    } else {
-      contextString = `Document: ${document.fileName}\n\n${content}`;
-    }
-    
-    // Limit context length to avoid issues with the API
-    const maxContextLength = 8000;
-    if (contextString.length > maxContextLength) {
-      contextString = contextString.substring(0, maxContextLength) + '...(truncated)';
-    }
-    
-    return contextString;
-  };
-
-  // Toggle voice mode
-  const toggleVoiceMode = () => {
-    // Toggle between text and voice modes
-    const newVoiceMode = !realtimeVoice.state.isVoiceMode;
-    
-    // Stop recording if needed
-    if (realtimeVoice.state.isRecording) {
-      realtimeVoice.stopRecording();
-    }
-    
-    // If enabling voice mode, connect to Realtime API if not already connected
-    if (newVoiceMode && !realtimeVoice.state.isConnected && !realtimeVoice.state.isConnecting) {
-      // Request microphone permission first
-      requestMicrophonePermission()
-        .then(permissionGranted => {
-          if (permissionGranted) {
-            // Connect without parameter - the hook should use the documentIdRef internally
-            realtimeVoice.connect();
-            
-            // If we have document context, set it after connection
-            if (currentDocument && documentContext) {
-              const formattedContext = formatDocumentForVoice(documentContext, currentDocument);
-              realtimeVoice.setContext(formattedContext);
-            }
-          } else {
-            setError('Microphone permission denied. Voice mode requires microphone access.');
-          }
-        })
-        .catch(error => {
-          console.error('Error requesting microphone permission:', error);
-          setError('Failed to access microphone: ' + error.message);
-        });
-    }
-    
-    realtimeVoice.toggleVoiceMode();
-  };
-
-  // Request microphone permission
-  const requestMicrophonePermission = async (): Promise<boolean> => {
-    try {
-      // Request microphone permission
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Stop all tracks immediately (we just need the permission)
-      stream.getTracks().forEach(track => track.stop());
-      
-      return true;
-    } catch (error) {
-      console.error('Microphone permission error:', error);
-      return false;
-    }
-  };
-
-  // Handle recording
-  const handleRecording = () => {
-    if (realtimeVoice.state.isRecording) {
-      realtimeVoice.stopRecording();
-    } else {
-      // Show "listening" message
-      const listeningMessage: Message = {
-        role: 'assistant',
-        content: '🎤 Listening...',
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, listeningMessage]);
-      
-      realtimeVoice.startRecording();
     }
   };
 
@@ -670,19 +398,6 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
               <h2 className="text-xl font-semibold text-white mb-2">{currentDocument.fileName}</h2>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Realtime Voice Status Indicator */}
-      {realtimeVoice.state.isConnecting && (
-        <div className="bg-yellow-50 p-2 text-center border-b border-yellow-200">
-          <span className="text-yellow-700">Connecting to voice service...</span>
-        </div>
-      )}
-      
-      {realtimeVoice.state.isConnected && realtimeVoice.state.isVoiceMode && (
-        <div className="bg-green-50 p-2 text-center border-b border-green-200">
-          <span className="text-green-700">Voice mode active</span>
         </div>
       )}
 
@@ -763,67 +478,24 @@ export default function ChatInterface({ selectedDocumentId, onDocumentUpload }: 
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            {/* Voice/Text toggle button */}
+          <div className="flex space-x-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={selectedDocumentId ? "Ask a question about your document..." : "Select a document to start chatting..."}
+              className="flex-1 p-3 border rounded-lg"
+              disabled={!selectedDocumentId || isStreaming}
+            />
             <button
-              type="button"
-              onClick={toggleVoiceMode}
-              className={`p-3 rounded-full ${realtimeVoice.state.isVoiceMode ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-              title={realtimeVoice.state.isVoiceMode ? "Switch to text mode" : "Switch to voice mode"}
-              disabled={!selectedDocumentId}
+              type="submit"
+              disabled={!selectedDocumentId || !input.trim() || isStreaming}
+              className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
             >
-              {realtimeVoice.state.isVoiceMode ? <FaKeyboard /> : <FaMicrophone />}
+              Send
             </button>
-
-            {realtimeVoice.state.isVoiceMode ? (
-              /* Voice input mode */
-              <button
-                type="button"
-                onClick={handleRecording}
-                disabled={!selectedDocumentId || !realtimeVoice.state.isConnected}
-                className={`flex-1 p-3 rounded-lg flex items-center justify-center space-x-2 ${
-                  realtimeVoice.state.isRecording 
-                    ? 'bg-red-500 text-white hover:bg-red-600' 
-                    : 'bg-blue-500 text-white hover:bg-blue-600'
-                } disabled:opacity-50`}
-              >
-                {realtimeVoice.state.isRecording ? (
-                  <>
-                    <FaMicrophoneSlash className="animate-pulse" />
-                    <span>Stop Recording</span>
-                  </>
-                ) : (
-                  <>
-                    <FaMicrophone />
-                    <span>Start Recording</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              /* Text input mode */
-              <>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={selectedDocumentId ? "Ask a question about your document..." : "Select a document to start chatting..."}
-                  className="flex-1 p-3 border rounded-lg"
-                  disabled={!selectedDocumentId || isStreaming}
-                />
-                <button
-                  type="submit"
-                  disabled={!selectedDocumentId || !input.trim() || isStreaming}
-                  className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
-                >
-                  Send
-                </button>
-              </>
-            )}
           </div>
         </form>
-        
-        {/* Audio playback element (hidden) */}
-        <audio ref={audioRef} className="hidden" />
       </div>
     </div>
   );

@@ -34,9 +34,7 @@ export async function GET(
       );
     }
 
-    console.log("params values", params);
-
-    const { documentId } = await params;
+    const documentId = params.documentId;
     console.log(`Fetching document: ${documentId} for user: ${userData.userId}`);
 
     // Connect to MongoDB
@@ -90,7 +88,7 @@ export async function DELETE(
       );
     }
 
-    const { documentId } = await params;
+    const documentId = params.documentId;
     console.log(`Deleting document: ${documentId} for user: ${userData.userId}`);
 
     // Connect to MongoDB

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
+import { verifyJwtToken } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing authentication token' }, { status: 401 });
     }
 
-    const payload = await verifyToken(token);
+    const payload = await verifyJwtToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Invalid authentication token' }, { status: 401 });
     }
